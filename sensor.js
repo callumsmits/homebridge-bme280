@@ -1,68 +1,40 @@
-'use strict';
+"use strict";
 
-const bme280_sensor = require('bme280-sensor');
-var debug = require('debug')('BME280');
-var logger = require("mcuiot-logger").logger;
-const moment = require('moment');
+const fetch = require("node-fetch");
 
 let Service, Characteristic;
 var CommunityTypes;
 var FakeGatoHistoryService;
 
-module.exports = (homebridge) => {
+module.exports = homebridge => {
   Service = homebridge.hap.Service;
   Characteristic = homebridge.hap.Characteristic;
-  CommunityTypes = require('hap-nodejs-community-types')(homebridge);
-  FakeGatoHistoryService = require('fakegato-history')(homebridge);
+  CommunityTypes = require("hap-nodejs-community-types")(homebridge);
 
-  homebridge.registerAccessory('homebridge-bme280', 'BME280', BME280Plugin);
+  homebridge.registerAccessory("homebridge-bme280", "BME280", BME280Plugin);
 };
 
 class BME280Plugin {
   constructor(log, config) {
     this.log = log;
     this.name = config.name;
+    this.url = config.url;
     this.name_temperature = config.name_temperature || this.name;
     this.name_humidity = config.name_humidity || this.name;
-    this.refresh = config['refresh'] || 60; // Update every minute
-    this.options = config.options || {};
-    this.spreadsheetId = config['spreadsheetId'];
-    if (this.spreadsheetId) {
-      this.log_event_counter = 59;
-      this.logger = new logger(this.spreadsheetId);
-    }
+    this.refresh = config["refresh"] || 60; // Update every minute
 
-    this.init = false;
-    this.data = {};
-    if ('i2cBusNo' in this.options) this.options.i2cBusNo = parseInt(this.options.i2cBusNo);
-    if ('i2cAddress' in this.options) this.options.i2cAddress = parseInt(this.options.i2cAddress);
-    this.log(`BME280 sensor options: ${JSON.stringify(this.options)}`);
-
-    try {
-      this.sensor = new bme280_sensor(this.options);
-    } catch (ex) {
-      this.log("BME280 initialization failed:", ex);
-    }
-
-    if (this.sensor)
-      this.sensor.init()
-      .then(result => {
-        this.log(`BME280 initialization succeeded`);
-        this.init = true;
-
-        this.devicePolling.bind(this);
-      })
-      .catch(err => this.log(`BME280 initialization failed: ${err} `));
-
+    this.log(`BME280 sensor url: ${this.url}`);
 
     this.informationService = new Service.AccessoryInformation();
 
     this.informationService
       .setCharacteristic(Characteristic.Manufacturer, "Bosch")
-      .setCharacteristic(Characteristic.Model, "RPI-BME280")
-      .setCharacteristic(Characteristic.SerialNumber, this.device);
+      .setCharacteristic(Characteristic.Model, "ESP8266-BME280")
+      .setCharacteristic(Characteristic.SerialNumber, "280");
 
-    this.temperatureService = new Service.TemperatureSensor(this.name_temperature);
+    this.temperatureService = new Service.TemperatureSensor(
+      this.name_temperature
+    );
 
     this.temperatureService
       .getCharacteristic(Characteristic.CurrentTemperature)
@@ -70,64 +42,46 @@ class BME280Plugin {
         minValue: -100,
         maxValue: 100
       });
-    //        .on('get', this.getCurrentTemperature.bind(this));
 
-    this.temperatureService
-      .addCharacteristic(CommunityTypes.AtmosphericPressureLevel);
+    this.temperatureService.addCharacteristic(
+      CommunityTypes.AtmosphericPressureLevel
+    );
 
     this.humidityService = new Service.HumiditySensor(this.name_humidity);
 
     setInterval(this.devicePolling.bind(this), this.refresh * 1000);
-
-    this.temperatureService.log = this.log;
-    this.loggingService = new FakeGatoHistoryService("weather", this.temperatureService);
-
   }
 
   devicePolling() {
-    debug("Polling BME280");
-    if (this.sensor) {
-      this.sensor.readSensorData()
-        .then(data => {
-          this.log(`data(temp) = ${JSON.stringify(data, null, 2)}`);
-          if (!(this.log_event_counter % 10)) {
-            this.loggingService.addEntry({
-              time: moment().unix(),
-              temp: roundInt(data.temperature_C),
-              pressure: roundInt(data.pressure_hPa),
-              humidity: roundInt(data.humidity)
-            });
-          }
-          if (this.spreadsheetId) {
-            this.log_event_counter = this.log_event_counter + 1;
-            if (this.log_event_counter > 59) {
-              this.logger.storeBME(this.name, 0, roundInt(data.temperature_C), roundInt(data.humidity), roundInt(data.pressure_hPa));
-              this.log_event_counter = 0;
-            }
-          }
-          this.temperatureService
-            .setCharacteristic(Characteristic.CurrentTemperature, roundInt(data.temperature_C));
-          this.temperatureService
-            .setCharacteristic(CommunityTypes.AtmosphericPressureLevel, roundInt(data.pressure_hPa));
-          this.humidityService
-            .setCharacteristic(Characteristic.CurrentRelativeHumidity, roundInt(data.humidity));
-
-        })
-        .catch(err => {
-          this.log(`BME read error: ${err}`);
-          debug(err.stack);
-          if (this.spreadsheetId) {
-            this.logger.storeBME(this.name, 1, -999, -999, -999);
-          }
-
-        });
-    } else {
-      this.log("Error: BME280 Not Initalized");
-    }
+    fetch(this.url)
+      .then(res => res.json())
+      .then(data => {
+        this.log(`data(temp) = ${JSON.stringify(data, null, 2)}`);
+        
+        this.temperatureService.setCharacteristic(
+          Characteristic.CurrentTemperature,
+          roundInt(data.temp)
+        );
+        this.temperatureService.setCharacteristic(
+          CommunityTypes.AtmosphericPressureLevel,
+          roundInt(data.pressure)
+        );
+        this.humidityService.setCharacteristic(
+          Characteristic.CurrentRelativeHumidity,
+          roundInt(data.humidity)
+        );
+      })
+      .catch(err => {
+        this.log(`BME read error: ${err}`);
+      });
   }
 
   getServices() {
-    return [this.informationService, this.temperatureService, this.humidityService, this.loggingService]
+    return [
+      this.informationService,
+      this.temperatureService,
+      this.humidityService
+    ];
   }
 }
 
