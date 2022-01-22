@@ -30,6 +30,6 @@
   "homepage": "https://github.com/callumsmits/homebridge-bme280#readme",
   "dependencies": {
     "hap-nodejs-community-types": "https://github.com/homespun/hap-nodejs-community-types.git",
-    "node-fetch": "^1.7.3"
+    "node-fetch": "^3.1.1"
   }
 }
